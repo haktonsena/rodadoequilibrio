@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Roda do Equilíbrio</title>
+  <style>
+    :root{
+      --bg:#0f2230;
+      --ink:#e8f1f7;
+      --muted:#9fb6c7;
+      --accent:#ff8a3d;
+      --fill:#6fc2b0;
+      --fill-20: rgba(111,194,176,.2);
+      --grid:#284051;
+      --ring:#dbe7ef;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, 'Helvetica Neue', Arial, 'Noto Sans';
+      background: radial-gradient(1200px 1200px at 80% -10%, #14304a 0, #0f2230 60%, #0b1a26 100%);
+      color:var(--ink);
+      display:grid; grid-template-columns: clamp(280px, 28vw, 360px) 1fr; gap:clamp(12px,2vw,24px); padding:clamp(12px,2vw,24px); align-items: stretch;
+    }
+    header{grid-column:1/-1; display:flex; align-items:center; gap:16px;}
+    header h1{font-size:clamp(18px,3vw,28px); margin:0; font-weight:700}
+    header .meta{color:var(--muted); font-size:clamp(12px,1.6vw,14px)}
+    .panel{background: rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:18px; padding:clamp(12px,2vw,18px); box-shadow: 0 10px 30px rgba(0,0,0,.25);display:flex; flex-direction:column; gap:12px;}
+    .row{display:grid; grid-template-columns: 1fr auto 64px; gap:10px; align-items:center}
+    .row label{font-weight:600; font-size:clamp(13px,1.6vw,15px)}
+    input[type="range"]{accent-color:var(--accent); width:100%}
+    input[type="number"]{width:64px; padding:6px 8px; border-radius:10px; border:1px solid rgba(255,255,255,.12); background:#102636; color:var(--ink)}
+    .hint{color:var(--muted); font-size:12px}
+    .buttons{display:flex; gap:8px; flex-wrap:wrap; margin-top:8px}
+    button{border:none; padding:10px 14px; border-radius:12px; font-weight:700; cursor:pointer; color:#0d1d29; background:var(--fill);}button.secondary{background:transparent; color:var(--ink); border:1px solid rgba(255,255,255,.2)}
+    .canvas-wrap{position:relative; display:grid; place-items:center; width:100%; height:min(72vh, calc(100vh - 160px)); min-height:420px; background: rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.08); border-radius:18px;}
+    #chart{width:100%; height:100%}
+    .legend{position:absolute; bottom:10px; right:12px; font-size:12px; color:var(--muted)}
+
+    /* Responsivo */
+    @media (max-width: 1100px){
+      body{grid-template-columns: 1fr;}
+      .canvas-wrap{height:60vh; min-height:360px}
+    }
+    @media (max-width: 700px){
+      .row{grid-template-columns: 1fr; gap:6px}
+      input[type="number"]{width:100%}
+      .legend{font-size:11px}
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10A10.011 10.011 0 0 0 12 2Zm0 2a8 8 0 1 1-8 8 8.009 8.009 0 0 1 8-8Z" fill="currentColor" opacity=".5"/><path d="M12 6a1 1 0 0 1 1 1v3.382l2.447 1.414a1 1 0 1 1-1 1.732l-3-1.732A1 1 0 0 1 11 11V7a1 1 0 0 1 1-1Z" fill="currentColor"/></svg>
+    <div>
+      <h1>Roda do Equilíbrio — Avaliação Pessoal</h1>
+      <div class="meta">Subáreas ativas: Casamento/Família, Descanso/Pausa, Exercício/Nutrição e Diversão/Recreação. Preencha 0–10 e o gráfico atualiza ao vivo.</div>
+    </div>
+  </header>
+  <aside class="panel" id="controls"></aside>
+  <main class="canvas-wrap">
+    <canvas id="chart"></canvas>
+    <!-- <div class="legend">Arraste para salvar como imagem • Use “Exportar PNG”</div> -->
+  </main>
+  <script>
+  // ===== Configuração das áreas (com subdivisões pedidas) =====
+  const AREAS_STRUCT = [
+    { name: 'Caminhada com Deus' },
+    { name: 'Discipulando Outros' },
+    { name: 'Casamento & Família', subs: ['Casamento','Família'] },
+    { name: 'Finanças Pessoais' },
+    { name: 'Comunidade Bíblica' },
+    { name: 'Diversão & Recreação', subs: ['Diversão','Recreação'] },
+    { name: 'Exercícios & Nutrição', subs: ['Exercício','Nutrição'] },
+    { name: 'Descanso & Pausa', subs: ['Descanso','Pausa'] }
+  ];
+
+  function flattenAreas(struct){
+    const axes = [];
+    struct.forEach(item=>{
+      if(item.subs && item.subs.length){ item.subs.forEach(s=> axes.push({ key:`${item.name} :: ${s}`, label:s, group:item.name })); }
+      else axes.push({ key:item.name, label:item.name, group:null });
+    });
+    return axes;
+  }
+  let AXES = flattenAreas(AREAS_STRUCT);
+  const state = Object.fromEntries(AXES.map((ax,i)=>[ax.key,(i%2?6:8)]));
+  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+
+  // Mapa de grupos (para rótulos principais)
+  const GROUPS = (function(){
+    const map = new Map();
+    AXES.forEach((ax, idx)=>{
+      if(ax.group){
+        if(!map.has(ax.group)) map.set(ax.group, []);
+        map.get(ax.group).push(idx);
+      }
+    });
+    return map; // Map<string, number[]> (índices de eixos)
+  })();
+
+  // ===== UI =====
+  const controls=document.getElementById('controls');
+  const frag=document.createDocumentFragment();
+  AREAS_STRUCT.forEach(area=>{
+    const header=document.createElement('div');
+    header.style.fontWeight='700';header.style.marginTop='6px';header.style.color='var(--accent)';
+    header.textContent=(area.subs && area.subs.length)? area.name+' — subáreas':area.name;
+    frag.appendChild(header);
+    ((area.subs && area.subs.length)?area.subs.map(s=>({key:`${area.name} :: ${s}`,label:s})):[{key:area.name,label:area.name}])
+    .forEach(({key,label})=>{
+      const row=document.createElement('div');row.className='row';
+      const lab=document.createElement('label');lab.textContent=label;
+      const range=document.createElement('input');range.type='range';range.min=0;range.max=10;range.step=1;range.value=state[key];
+      const numeric=document.createElement('input');numeric.type='number';numeric.min=0;numeric.max=10;numeric.step=1;numeric.value=state[key];
+      function sync(v){state[key]=clamp(parseInt(v||0,10),0,10);range.value=state[key];numeric.value=state[key];draw();persist();}
+      range.oninput=e=>sync(e.target.value);numeric.oninput=e=>sync(e.target.value);
+      row.append(lab,range,numeric);frag.appendChild(row);
+    });
+  });
+  const hint=document.createElement('div');hint.className='hint';hint.textContent='0 (nada satisfeito) → 10 (pleno).';
+  const btns=document.createElement('div');btns.className='buttons';
+  const btnReset=document.createElement('button');btnReset.className='secondary';btnReset.textContent='Zerar (0)';btnReset.onclick=()=>{Object.keys(state).forEach(k=>state[k]=0);document.querySelectorAll('input').forEach(inp=>{if(inp.type==='range'||inp.type==='number'){inp.value=0;}});draw();persist();};
+  const btnTen=document.createElement('button');btnTen.className='secondary';btnTen.textContent='Preencher 10';btnTen.onclick=()=>{Object.keys(state).forEach(k=>state[k]=10);document.querySelectorAll('input').forEach(inp=>{if(inp.type==='range'||inp.type==='number'){inp.value=10;}});draw();persist();};
+  const btnExport=document.createElement('button');btnExport.textContent='Exportar PNG';btnExport.onclick=()=>{
+    const dataUrl = createPrintablePNG();
+    const l=document.createElement('a');
+    l.download='roda-do-equilibrio.png';
+    l.href=dataUrl;
+    l.click();
+  };
+
+  // [WHATSAPP] — inclui data e remove links do texto
+  const btnShare=document.createElement('button');btnShare.textContent='Compartilhar WhatsApp';btnShare.onclick=()=>{
+    const lines = AXES.map(ax=>`${ax.label}: ${String(state[ax.key]??0)}/10`);
+    const titulo = 'Minha Roda do Equilíbrio';
+    const dataBR = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+
+    // monta o texto sem URL e com a data
+    let texto = [titulo, '', ...lines, '', `📅 Gerado em: ${dataBR}`].join('\n');
+
+    // segurança extra: remove qualquer link que porventura apareça
+    texto = texto.replace(/https?:\/\/\S+/gi, '').trim();
+
+    const wa = `https://wa.me/?text=${encodeURIComponent(texto)}`;
+    window.open(wa, '_blank');
+  };
+
+  btns.append(btnExport,btnShare,btnReset,btnTen);
+  controls.append(frag,hint,btns);
+
+  // ===== Canvas & desenho =====
+  const canvas=document.getElementById('chart');
+  const ctx=canvas.getContext('2d');
+  function resize(){
+    const dpr=window.devicePixelRatio||1;const {clientWidth:w,clientHeight:h}=canvas;
+    canvas.width=Math.floor(w*dpr);canvas.height=Math.floor(h*dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);draw();
+  }
+  if (typeof ResizeObserver !== 'undefined') { new ResizeObserver(resize).observe(canvas); } else { window.addEventListener('resize', resize); setTimeout(resize, 0); }
+
+  function draw(){
+    const W=canvas.clientWidth,H=canvas.clientHeight;ctx.clearRect(0,0,W,H);
+    const cx=W/2,cy=H/2;const R=Math.min(W,H)/2 - Math.min(W,H)*0.08;const levels=10;
+
+    // Tamanhos responsivos de fonte
+    const subLabelSize = Math.max(10, Math.min(14, R*0.045));
+    const mainLabelSize = Math.max(12, Math.min(16, R*0.05));
+    const valueSize    = Math.max(10, Math.min(13, R*0.04));
+
+    // Fundo
+    const grd=ctx.createRadialGradient(cx,cy,R*0.1,cx,cy,R*1.1);grd.addColorStop(0,'rgba(255,255,255,0.02)');grd.addColorStop(1,'rgba(255,255,255,0)');ctx.fillStyle=grd;ctx.beginPath();ctx.arc(cx,cy,R*1.08,0,Math.PI*2);ctx.fill();
+
+    // Anéis
+    for(let i=1;i<=levels;i++){ctx.beginPath();ctx.arc(cx,cy,R*(i/levels),0,Math.PI*2);ctx.strokeStyle=i%2?'rgba(219,231,239,.6)':'rgba(219,231,239,.25)';ctx.stroke();}
+
+    const N=AXES.length;
+
+    // Eixos & rótulos das SUBÁREAS (perto do bordo)
+    for(let i=0;i<N;i++){
+      const a=-Math.PI/2+i*(2*Math.PI/N);
+      // eixo
+      ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx+Math.cos(a)*R,cy+Math.sin(a)*R);ctx.strokeStyle='rgba(40,64,81,.9)';ctx.lineWidth=1;ctx.stroke();
+      // rótulo da subárea
+      const tx=cx+Math.cos(a)*(R+18);const ty=cy+Math.sin(a)*(R+18);
+      ctx.save();ctx.translate(tx,ty);
+      ctx.textAlign=Math.cos(a)>0.2?'left':Math.cos(a)<-0.2?'right':'center';
+      ctx.textBaseline='middle';ctx.font=`600 ${subLabelSize}px system-ui`;
+      ctx.fillStyle='var(--ink)';
+      ctx.fillText(AXES[i].label,0,0);
+      ctx.restore();
+    }
+
+    // Rótulos das ÁREAS PRINCIPAIS (centrados entre subeixos)
+    ctx.save();
+    ctx.font=`700 ${mainLabelSize}px system-ui`;
+    ctx.fillStyle='var(--accent)';
+    GROUPS.forEach((indices, groupName)=>{
+      if(indices.length===0) return;
+      const a1 = -Math.PI/2 + indices[0]*(2*Math.PI/N);
+      const a2 = -Math.PI/2 + indices[indices.length-1]*(2*Math.PI/N);
+      let am = (a1 + a2)/2; // ângulo médio
+      const tx=cx+Math.cos(am)*(R+42);
+      const ty=cy+Math.sin(am)*(R+42);
+      ctx.textAlign=Math.cos(am)>0.2?'left':Math.cos(am)<-0.2?'right':'center';
+      ctx.textBaseline='middle';
+      ctx.fillText(groupName, tx, ty);
+    });
+    ctx.restore();
+
+    // Números 1..10 no eixo superior
+    ctx.save();ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle='rgba(233,244,252,.7)';ctx.font=`${Math.max(10, Math.min(12, R*0.035))}px system-ui`;
+    for(let i=1;i<=levels;i++){ctx.fillText(i.toString(),cx,cy - R*(i/levels));}
+    ctx.restore();
+
+    // Polígono preenchido
+    ctx.beginPath();
+    for(let i=0;i<N;i++){
+      const v=clamp(state[AXES[i].key]||0,0,10)/10;const a=-Math.PI/2+i*(2*Math.PI/N);
+      const x=cx+Math.cos(a)*R*v;const y=cy+Math.sin(a)*R*v;
+      if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+    }
+    ctx.closePath();
+    ctx.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--fill-20');ctx.fill();
+    ctx.strokeStyle=getComputedStyle(document.documentElement).getPropertyValue('--fill');ctx.lineWidth=2;ctx.stroke();
+
+    // Pontos + rótulo (valor + subárea) na MESMA COR dos números
+    const labelColor='rgba(233,244,252,.9)';
+    for(let i=0;i<N;i++){
+      const val=clamp(state[AXES[i].key]||0,0,10);
+      const v=val/10;const a=-Math.PI/2+i*(2*Math.PI/N);
+      const x=cx+Math.cos(a)*R*v;const y=cy+Math.sin(a)*R*v;
+      // ponto
+      ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);
+      ctx.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--fill');
+      ctx.fill();ctx.strokeStyle='#0c1d29';ctx.lineWidth=1;ctx.stroke();
+      // valor
+      const vx=x+Math.cos(a)*10; const vy=y+Math.sin(a)*10;
+      ctx.fillStyle=labelColor; ctx.font=`600 ${valueSize}px system-ui`;
+      ctx.textAlign=Math.cos(a)>0? 'left' : 'right'; if(Math.abs(Math.cos(a))<0.2) { ctx.textAlign='center'; }
+      ctx.textBaseline='middle';
+      ctx.fillText(String(val), vx, vy);
+      // rótulo da subárea próximo ao valor
+      const lx=x+Math.cos(a)*24; const ly=y+Math.sin(a)*24;
+      ctx.font=`500 ${Math.max(10, valueSize-1)}px system-ui`;
+      ctx.fillStyle=labelColor;
+      ctx.textAlign=Math.cos(a)>0? 'left' : 'right'; if(Math.abs(Math.cos(a))<0.2) { ctx.textAlign='center'; }
+      ctx.fillText(AXES[i].label, lx, ly);
+    }
+
+    // Miolo
+    ctx.beginPath();ctx.arc(cx,cy,10,0,Math.PI*2);ctx.fillStyle='rgba(255,255,255,.85)';ctx.fill();
+  }
+
+  // ===== Exportação (fundo branco, linhas/textos pretos, data no rodapé) =====
+  function createPrintablePNG(){
+    const PAD = 32;                // margem
+    const FOOT = 40;               // altura do rodapé
+    const scale = 2;               // resolução (2x para nitidez)
+
+    // Tamanho baseado no canvas visível
+    const baseW = Math.max(700, document.querySelector('.canvas-wrap').clientWidth);
+    const baseH = Math.max(500, document.querySelector('.canvas-wrap').clientHeight);
+    const W = Math.floor(baseW)*scale;
+    const H = Math.floor(baseH)*scale + FOOT*scale;
+
+    const oc = document.createElement('canvas');
+    oc.width = W; oc.height = H;
+    const ctx2 = oc.getContext('2d');
+    ctx2.setTransform(1,0,0,1,0,0);
+
+    // Fundo branco
+    ctx2.fillStyle = '#ffffff';
+    ctx2.fillRect(0,0,W,H);
+
+    // Área do gráfico (sem o rodapé)
+    const chartW = W; const chartH = H - FOOT*scale;
+
+    // Renderiza o gráfico em preto
+    renderPrintable(ctx2, chartW, chartH, PAD*scale);
+
+    // Rodapé com data atual
+    const dt = new Date();
+    const dataBR = dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+    ctx2.fillStyle = '#000000';
+    ctx2.font = `${25*scale}px system-ui`;
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'middle';
+    ctx2.fillText(`Gerado em ${dataBR}`, W/2, H - (FOOT*scale)/2);
+
+    return oc.toDataURL('image/png');
+  }
+
+  function renderPrintable(ctx2, W, H, pad){
+    // Paleta em preto
+    const colorText = '#000';
+    const colorLines = '#000';
+    const colorRingStrong = 'rgba(0,0,0,0.7)';
+    const colorRingWeak = 'rgba(0,0,0,0.35)';
+    const colorPolyStroke = '#000';
+    const colorPolyFill = 'rgba(0,0,0,0.08)';
+    const colorPointFill = '#000';
+
+    // Centro e raio
+    const cx = W/2, cy = H/2;
+    const R = Math.min(W,H)/2 - pad;
+    const levels = 10;
+
+    // Anéis
+    for(let i=1;i<=levels;i++){
+      const r = R*(i/levels);
+      ctx2.beginPath(); ctx2.arc(cx,cy,r,0,Math.PI*2);
+      ctx2.strokeStyle = (i%2? colorRingStrong : colorRingWeak);
+      ctx2.lineWidth = 1; ctx2.stroke();
+    }
+
+    const N = AXES.length;
+
+    // Eixos + rótulos de subárea
+    const subLabelSize = Math.max(18, Math.floor(R*0.05));
+    const mainLabelSize = Math.max(20, Math.floor(R*0.055));
+    const valueSize = Math.max(18, Math.floor(R*0.045));
+
+    for(let i=0;i<N;i++){
+      const a=-Math.PI/2 + i*(2*Math.PI/N);
+      // eixo
+      ctx2.beginPath(); ctx2.moveTo(cx,cy); ctx2.lineTo(cx+Math.cos(a)*R, cy+Math.sin(a)*R);
+      ctx2.strokeStyle = colorLines; ctx2.lineWidth=1; ctx2.stroke();
+      // rótulo subárea
+      const tx=cx+Math.cos(a)*(R+24); const ty=cy+Math.sin(a)*(R+24);
+      ctx2.save(); ctx2.translate(tx,ty);
+      ctx2.textAlign = Math.cos(a)>0.2?'left':(Math.cos(a)<-0.2?'right':'center');
+      ctx2.textBaseline='middle'; ctx2.fillStyle=colorText;
+      ctx2.font = `600 ${subLabelSize}px system-ui`;
+      ctx2.fillText(AXES[i].label, 0, 0);
+      ctx2.restore();
+    }
+
+    // Números 1..10 no topo
+    ctx2.save(); ctx2.textAlign='center'; ctx2.textBaseline='middle'; ctx2.fillStyle=colorText; ctx2.font = `${Math.max(16, Math.floor(R*0.04))}px system-ui`;
+    for(let i=1;i<=levels;i++){ const r = R*(i/levels); ctx2.fillText(String(i), cx, cy - r); }
+    ctx2.restore();
+
+    // Polígono
+    ctx2.beginPath();
+    for(let i=0;i<N;i++){
+      const v = Math.max(0, Math.min(10, state[AXES[i].key]||0))/10;
+      const a = -Math.PI/2 + i*(2*Math.PI/N);
+      const x = cx + Math.cos(a)*R*v; const y = cy + Math.sin(a)*R*v;
+      if(i===0) ctx2.moveTo(x,y); else ctx2.lineTo(x,y);
+    }
+    ctx2.closePath();
+    ctx2.fillStyle = colorPolyFill; ctx2.fill();
+    ctx2.strokeStyle = colorPolyStroke; ctx2.lineWidth=2; ctx2.stroke();
+
+    // Pontos e rótulos
+    for(let i=0;i<N;i++){
+      const val = Math.max(0, Math.min(10, state[AXES[i].key]||0));
+      const v = val/10; const a = -Math.PI/2 + i*(2*Math.PI/N);
+      const x = cx + Math.cos(a)*R*v; const y = cy + Math.sin(a)*R*v;
+      // ponto
+      ctx2.beginPath(); ctx2.arc(x,y,4,0,Math.PI*2); ctx2.fillStyle=colorPointFill; ctx2.fill(); ctx2.strokeStyle='#000'; ctx2.lineWidth=1; ctx2.stroke();
+      // valor
+      const vx=x+Math.cos(a)*12; const vy=y+Math.sin(a)*12; ctx2.fillStyle=colorText; ctx2.font=`600 ${valueSize}px system-ui`; ctx2.textBaseline='middle';
+      ctx2.textAlign=Math.cos(a)>0? 'left' : 'right'; if(Math.abs(Math.cos(a))<0.2){ ctx2.textAlign='center'; }
+      ctx2.fillText(String(val), vx, vy);
+    }
+  }
+
+  // ===== Persistência =====
+  function persist(){ try{ localStorage.setItem('roda-equilibrio-v3', JSON.stringify(state)); }catch(e){} }
+  function restore(){ let s=null; try{ s=JSON.parse(localStorage.getItem('roda-equilibrio-v3')||'null'); }catch(e){} if(s){ Object.keys(state).forEach(k=>{ if(typeof s[k]==='number') state[k]=clamp(s[k],0,10); }); } }
+  restore();
+  window.addEventListener('load',resize);
+
+  // ===== Self-tests mínimos (apenas console) =====
+  (function selfTests(){
+    try{
+      const sample = ['a','b'].join('\n');
+      if(!sample.includes('\n')) throw new Error('join("\\n") falhou');
+      const mockLines = ['L1: 5/10','L2: 7/10'];
+      const texto = ['Teste', '', ...mockLines, '', 'http://x'].join('\n');
+      const encoded = encodeURIComponent(texto);
+      if(!/%0A/.test(encoded)) throw new Error('encodeURIComponent não manteve quebras de linha (%0A)');
+      console.info('[Roda] TESTES OK');
+    }catch(err){ console.warn('[Roda] TESTE FALHOU:', err.message); }
+  })();
+  </script>
+</body>
+</html>
